@@ -5,6 +5,7 @@ import datetime
 import math
 import json
 
+
 symbols = ['GSUM','MDGS','FLDM','AMTX','SPI','MIST','MVIS','BHAT','SLCA','NHLD','LIVX','TKAT','NRT','OGEN','INSE','WHLM','MTP','AGRX','YTRA',
            'MYO','BIMI','OPTT','SGBX','SNDL','HSDT','GMBL','CWBR','FNGD','MLND','CJJD','OCGN','GENE','SIEN','ACHV','FRAN','PME','AQMS','GALT']
 
@@ -17,8 +18,9 @@ if dt.hour > 12:
     portfolio = r.account.build_holdings()
     for key in portfolio:
         if key in symbols:
+            print(portfolio[key])
             quantity = portfolio[key]['value']
-            response = r.orders.order(key, quantity, 'sell', timeInForce='gfd')
+            response = r.orders.order_sell_market(key, quantity, timeInForce='gtc', extendedHours=False)
             trans = "sell"
         else:
             print(key+' is not in the managed portfolio')
@@ -30,8 +32,12 @@ else:
     data = get_data(symbols)
     target, untarget, longs, shorts, pricel, prices = get_pick(data, symbols)
     quantity = math.floor(buyPow/pricel)
-    response = r.orders.order(target, quantity, 'buy', timeInForce='gfd')
+    response = r.orders.order_buy_market(target, quantity, timeInForce='gtc', extendedHours=False)
     trans = "buy"
 
-with open('../'+trans+str(dt)+'.txt', 'w') as file:
+
+trans = "buy"
+final = dt.strftime("%m-%d-%Y")
+
+with open('../'+trans+final+'.txt', 'w') as file:
      file.write(json.dumps(response))
