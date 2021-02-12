@@ -1,23 +1,43 @@
 from sklearn.model_selection import train_test_split
 from sklearn import linear_model
 import scipy.stats as scpy
+import yfinance as yf
 import numpy as np
 import pandas as pd
+import datetime
 
+def get_data(symbols):
+    data = yf.download(symbols, period = "1y",interval = '1d' )
+    for symbol in symbols:
+        data['pHigh',symbol] = data['High',symbol].shift(1)
+        data['pLow',symbol] = data['Low',symbol].shift(1)
+        data['pClose',symbol] = data['Close',symbol].shift(1)
+        data['pVolume',symbol] = data['Volume',symbol].shift(1)
+        data = data.iloc[1:]
+        data = data.fillna(0)
+    return data
 
-def get_pick(data, symbols, i):
+def get_pick(data, symbols, i='default'):
     opens = []
     closes = []
     decisions = []
     
     for symbol in symbols:
         
-        features = ['Open','pHigh','pLow','pClose','pVolume']
-        symbolz = [symbol for x in features]
+        if i != 'default':
+            x=i+1
+            y=i+64
+            z=i+65
+        else:
+            x=0
+            y=-2
+            z=-1
+        #features = ['Open','pHigh','pLow','pClose','pVolume']
+        #symbolz = [x for symbol in features]
         #X = data[features, symbolz][i+1:i+64]
-        X = data['Open', symbol][i+1:i+64].to_numpy().reshape(-1,1)
-        y = data['Close',symbol][i+1:i+64]
-        
+        X = data['Open', symbol][x:y].to_numpy().reshape(-1,1)
+        y = data['Close',symbol][x:y]
+            
         #Split data into train and test
         train_X, val_X, train_y, val_y = train_test_split(X, y)
         
@@ -30,8 +50,9 @@ def get_pick(data, symbols, i):
         l1 = preds_val - val_y
         mean = np.average(l1)
         stdev = np.std(l1)
-        predict = data['Open',symbol][i+65].reshape(1,-1)
-        pred_increase = model.predict(predict)- data['Open',symbol][i+65]
+        predict = data['Open',symbol][z].reshape(1,-1)
+        pred_increase = model.predict(predict)- data['Open',symbol][z]
+
         #Compute long/short with confidence 
         zscore = 3
         while True:
@@ -52,18 +73,38 @@ def get_pick(data, symbols, i):
                 
             else:
                 zscore -= .001
-        
+
         #Add data to lists
-        opens.append(data['Open',symbol][i+65])
-        closes.append(data['Close',symbol][i+65])
+        opens.append(data['Open',symbol][z])
+        closes.append(data['Close',symbol][z])
         decisions.append(decision)
         
     #Turn lists into a Dataframe 
-    df = pd.DataFrame({'ticker': symbols,'date': data.index[i+65],'open': opens,'decision': decisions,'close':closes})
+    df = pd.DataFrame({'ticker': symbols,'date': data.index[z],'open': opens,'decision': decisions,'close':closes})
     df_sorted = df.sort_values(by=['decision']).reset_index()
     long = df_sorted['ticker'][len(df_sorted)-1]
     short = df_sorted['ticker'][0]
     longs = [df_sorted['date'][len(df_sorted)-1],df_sorted['ticker'][len(df_sorted)-1],df_sorted['open'][len(df_sorted)-1],df_sorted['decision'][len(df_sorted)-1],df_sorted['close'][len(df_sorted)-1]]
     shorts = [df_sorted['date'][0],df_sorted['ticker'][0],df_sorted['open'][0],df_sorted['decision'][0],df_sorted['close'][0]]
+    pricel = df_sorted['open'][len(df_sorted)-1]
+    prices = short = df_sorted['open'][0]
+    return long, short, longs, shorts, pricel, prices
 
-    return long, short, longs, shorts
+
+class EST5EDT(datetime.tzinfo):
+
+    def utcoffset(self, dt):
+        return datetime.timedelta(hours=-5) + self.dst(dt)
+
+    def dst(self, dt):
+        d = datetime.datetime(dt.year, 3, 8)        #2nd Sunday in March
+        self.dston = d + datetime.timedelta(days=6-d.weekday())
+        d = datetime.datetime(dt.year, 11, 1)       #1st Sunday in Nov
+        self.dstoff = d + datetime.timedelta(days=6-d.weekday())
+        if self.dston <= dt.replace(tzinfo=None) < self.dstoff:
+            return datetime.timedelta(hours=1)
+        else:
+            return datetime.timedelta(0)
+
+    def tzname(self, dt):
+        return 'EST5EDT'
