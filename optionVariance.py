@@ -1,12 +1,19 @@
+from datetime import date, timedelta
 import matplotlib.pyplot as plt
 import yfinance as yf
+import pandas as pd
 import numpy as np
+import csv
 
 class OptionManager():
-    def __init__(self, ticker, contract):
+    def __init__(self, ticker, contract, show=True, graphAll=False):
+        self.show = show
+        self.long = None
+        self.short = None
         self.ticker = ticker
         self.stock = yf.Ticker(ticker)
         self.contract = contract
+        self.graphAll = graphAll
         self.optionsChains = {}
         self.callChains = {}
         self.putChains = {}
@@ -32,57 +39,111 @@ class OptionManager():
         self.callChainsF[expiration] = self.callChainsF[expiration][self.callChainsF[expiration]['inTheMoney'] == True]
         self.putChainsF[expiration] =  self.putChainsF[expiration][ self.putChainsF[expiration]['inTheMoney'] == True]
         #Open interest greater than 0
-        self.callChainsF[expiration] = self.callChainsF[expiration][self.callChainsF[expiration]['openInterest'] > 0]
-        self.putChainsF[expiration] =  self.putChainsF[expiration][self.putChainsF[expiration]['openInterest'] > 0]
+        self.callChainsF[expiration] = self.callChainsF[expiration][self.callChainsF[expiration]['openInterest'] > 1]
+        self.putChainsF[expiration] =  self.putChainsF[expiration][self.putChainsF[expiration]['openInterest'] > 1]
         #Regular contract size
         self.callChainsF[expiration] = self.callChainsF[expiration][self.callChainsF[expiration]['contractSize'] == "REGULAR"]
         self.putChainsF[expiration] =  self.putChainsF[expiration][ self.putChainsF[expiration]['contractSize'] == "REGULAR"]
+        #Last trade date is equal to today
 
+        if date.today().weekday() < 5:
+            dateStr = date.today().isoformat()
+        else:
+            dateStr = date.today() + timedelta(days=4 - date.today().weekday())
+
+        self.callChainsF[expiration] = self.callChainsF[expiration][self.callChainsF[expiration]['lastTradeDate'] >= pd.Timestamp(dateStr).floor('D')]
+        self.putChainsF[expiration] =  self.putChainsF[expiration][ self.putChainsF[expiration]['lastTradeDate'] >= pd.Timestamp(dateStr).floor('D')]
 
     def saveCSV(self,expiration):
         try:
-            callsFilter.to_csv('options-data.csv')
+            self.putChainsF[expiration].to_csv(expiration+'-options-data.csv')
         except PermissionError:
             print("Data not saved, close CSV before running")
 
-    def graphLines(self,expiration):
-        if self.contract == "call":
-            x = np.array(self.callChainsF[expiration].strike)
-            y = np.array(self.callChainsF[expiration].ask)
-            for i in range(len(y)-1):
-                if y[i] > y[i+1]:
-                    if self.variances[expiration]:
-                        self.variances[expiration] =[{"ask":y[i], "strike":x[i], "dif":(y[i+1]-y[i])/y[i]}]
-                    else:
-                        self.variances[expiration].append({"ask":y[i], "strike":x[i], "dif":(y[i+1]-y[i])/y[i]})
-                    
-        elif self.contract == "put":
-            x = np.array(self.putChainsF[expiration].strike)
-            y = np.array(self.putChainsF[expiration].ask)
-            for i in range(len(y)-1):
-                if y[i] < y[i+1]:
-                    if self.variances[expiration]:
-                        self.variances[expiration] =[{"ask":y[i], "strike":x[i], "dif":(y[i+1]-y[i])/y[i]}]
-                    else:
-                        self.variances[expiration].append({"ask":y[i], "strike":x[i], "dif":(y[i+1]-y[i])/y[i]})
+    def findObscure(self,expiration, ax):
+        x = np.array(self.callChainsF[expiration].strike if self.contract == "call" else self.putChainsF[expiration].strike)
+        y = np.array(self.callChainsF[expiration].ask if self.contract == "call" else self.putChainsF[expiration].ask)
+        for i in range(len(y)-1):
+            diff = (y[i+1]-y[i])/y[i] if self.contract == "call" else (y[i]-y[i+1])/y[i]
+            if diff > 0.01:
+                if self.graphAll:
+                    self.graphLine("circle", x[i], y[i], ax)
+                if expiration not in self.variances:
+                    self.variances[expiration] = [{"ask":y[i], "strike":x[i], "dif": diff, "index": i}]
+                else:
+                    self.variances[expiration].append({"ask":y[i], "strike":x[i], "dif": diff, "index": i})
 
-        plt.plot(x, y, marker='o',label=str(expiration))
+        if expiration in self.variances and self.graphAll:
+            self.graphLine("line",x,y,label=expiration)
+
+    def graphLine(self, shape, x, y, ax=None, label=None, color="r"):
+        if shape == "circle":
+            circle1 = plt.Circle((x, y), 5, color=color, fill=False, label=label)
+            ax.add_patch(circle1)
+        elif shape == "line":
+            plt.plot(x, y, marker='o',label=str(label))
+
+    #Only works for call right now
+    def analyzeMax(self, ax):
+        maxVar = 0
+        expiration = ""
+        for variance in self.variances:
+            maxDif = max([x['dif'] for x in self.variances[variance]])
+            if maxDif > maxVar:
+                maxVar = maxDif
+                expiration = variance
+        if expiration != "":
+            for item in self.variances[expiration]:
+                if item['dif'] == maxVar:
+                    #self.graphLine("circle", item['strike'], item['ask'], ax, label="Long")
+                    index = item['index']
+                    self.long=[item['strike'],item['ask']]
+
+        if expiration != "":  
+            x = np.array(self.callChainsF[expiration].strike if self.contract == "call" else self.putChainsF[expiration].strike)
+            y = np.array(self.callChainsF[expiration].ask if self.contract == "call" else self.putChainsF[expiration].ask)
+            z = np.array(self.callChainsF[expiration].bid if self.contract == "call" else self.putChainsF[expiration].bid)
+            self.graphLine("line",x,y,label="Ask-"+str(expiration))
+            self.graphLine("line",x,z,label="Bid-"+str(expiration))
+            #self.graphLine("circle", x[index+1], z[index+1], ax, label="Short", color="g")
+            self.short = [x[index+1],z[index+1]]
+            ax.annotate('xyz',xy=(1.1,-3.8),xytext=(1.3,-3.8), annotation_clip=False)
+            x_coord = (self.long[0] + self.short[0]) / 2
+            plt.plot([x_coord,x_coord],[self.long[1],self.short[1]], color="g")
+            plt.plot([x_coord,self.long[0]],[self.long[1],self.long[1]], color="g")
+            plt.plot([x_coord,self.short[0]],[self.short[1],self.short[1]], color="g")
+
+    def returnAnswer(self):
+        if self.long and self.short:
+            return self.short[1]-self.long[1]
 
     def createData(self):
         self.addExpirations()
-        for expiration in self.expirations[6:]:
+        fig, ax = plt.subplots()
+        for expiration in self.expirations:
             self.addOptionsChain(expiration)
-            self.graphLines(expiration)
-        plt.xlabel("Option Strike Price ($)")
-        plt.ylabel("Option Ask Price ($)")
-        plt.title(self.ticker + " " + self.contract.capitalize() + "s")
-        plt.legend()
-        plt.show()
+            self.findObscure(expiration, ax)
+        self.analyzeMax(ax)
+        if self.show:
+            plt.xlabel("Option Strike Price ($)")
+            plt.ylabel("Option Market Price ($)")
+            plt.suptitle(self.ticker + " " + self.contract.capitalize() + "s")
+            if self.long and self.short:
+                plt.title("Long at "+str(self.long[0]) + " and short at " + str(self.short[0]) +" for a profit between " +
+                str(round(self.short[1]-self.long[1],2)) +" and " + str(round(self.short[1]-self.long[1] + self.short[0] - self.long[0],2)))
+            plt.legend()
+            plt.show()
+        return self.returnAnswer()
 
-    
-msft = OptionManager("MSFT","call")
-msft.createData()
+tickers = []
+with open('convertcsv.csv', newline='') as csvfile:
+    reader = csv.DictReader(csvfile)
+    for row in reader:
+        tickers.append(row['Option Symbol'])
 
-
-#callsFilter.plot(kind='scatter',x='strike',y='ask',color='blue',ax=ax)
-
+for ticker in tickers:
+    value = OptionManager(ticker,"call",False, False).createData()
+    print(str(tickers.index(ticker))+"/"+str(len(tickers)))
+    if value is not None and value > 0:
+        print(ticker+" "+str(value))
+        break
